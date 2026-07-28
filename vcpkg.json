@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "automaticallyloweredweapons",
+  "version-string": "2.0.0.0",
+  "dependencies": [
+    "fmt",
+    "rsm-mmio",
+    "simpleini",
+    {
+      "name": "spdlog",
+      "features": [ "wchar" ]
+    }
+  ],
+  "builtin-baseline": "b472291f295551b7127359ea38fdd2ca092f6f1b"
+}
