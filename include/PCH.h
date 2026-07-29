@@ -10,12 +10,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <stop_token>
 #include <thread>
+#include <utility>
 
 using namespace std::literals;
 

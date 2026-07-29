@@ -26,16 +26,22 @@ namespace ALW
 			return;
 		}
 
+		_autoLower = ini.GetBoolValue(SECTION, "bAutoLower", _autoLower);
 		_lowerDelay = static_cast<float>(ini.GetDoubleValue(SECTION, "fLowerDelay", _lowerDelay));
 		_lowerAfterSprint = ini.GetBoolValue(SECTION, "bLowerAfterSprint", _lowerAfterSprint);
 		_requireLightOff = ini.GetBoolValue(SECTION, "bRequireLightOff", _requireLightOff);
+		_toggleKey = static_cast<std::int32_t>(ini.GetLongValue(SECTION, "iToggleKey", _toggleKey));
+		_debugLog = ini.GetBoolValue(SECTION, "bDebugLog", _debugLog);
 
 		if (_lowerDelay < 0.0f) {
 			_lowerDelay = 0.0f;
 		}
 
+		logger::info("bAutoLower = {}", _autoLower);
 		logger::info("fLowerDelay = {}", _lowerDelay);
 		logger::info("bLowerAfterSprint = {}", _lowerAfterSprint);
 		logger::info("bRequireLightOff = {}", _requireLightOff);
+		logger::info("iToggleKey = {}", _toggleKey);
+		logger::info("bDebugLog = {}", _debugLog);
 	}
 }

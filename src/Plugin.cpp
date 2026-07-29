@@ -20,6 +20,9 @@ namespace
 		case F4SE::MessagingInterface::kGameDataReady:
 			ALW::LowerWeapon::GetSingleton().OnDataReady();
 			break;
+		case F4SE::MessagingInterface::kInputLoaded:
+			ALW::LowerWeapon::GetSingleton().InstallInput();
+			break;
 		case F4SE::MessagingInterface::kNewGame:
 		case F4SE::MessagingInterface::kPostLoadGame:
 			ALW::LowerWeapon::GetSingleton().OnPlayerReady();

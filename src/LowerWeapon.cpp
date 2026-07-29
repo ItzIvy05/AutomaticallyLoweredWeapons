@@ -11,10 +11,12 @@ namespace ALW
 		constexpr auto VANILLA_FILE = "Fallout4.esm"sv;
 
 		constexpr std::uint32_t GUN_DOWN_FP = 0x09B20E;
+		constexpr std::uint32_t GUN_UP_FP = 0x09B20F;
 		constexpr std::uint32_t LOWER_WEAPON_PERK = 0x000802;
 
 		constexpr std::size_t IS_IN_COMBAT_VFUNC = 0xFE;
 		constexpr std::size_t PROCESS_EVENT_VFUNC = 0x01;
+		constexpr std::size_t PERFORM_INPUT_VFUNC = 0x00;
 
 		constexpr auto SPRINT_STOP = "PASprintStop"sv;
 
@@ -29,10 +31,82 @@ namespace ALW
 		};
 	}
 
+	namespace
+	{
+		std::uint32_t g_lastHandled = static_cast<std::uint32_t>(-1);
+
+		void ScanForToggle(const RE::InputEvent* a_queueHead)
+		{
+			const auto key = Settings::GetSingleton().ToggleKey();
+			if (key < 0) {
+				return;
+			}
+
+			const bool debug = Settings::GetSingleton().DebugLog();
+
+			for (auto event = a_queueHead; event; event = event->next) {
+				const auto button = event->As<RE::ButtonEvent>();
+				if (!button || !button->QJustPressed()) {
+					continue;
+				}
+
+				if (debug) {
+					logger::info("button device {} idCode {} time {}",
+						std::to_underlying(button->device.get()), button->idCode, button->timeCode);
+				}
+
+				if (button->device.get() != RE::INPUT_DEVICE::kKeyboard || button->idCode != key) {
+					continue;
+				}
+
+				if (button->timeCode == g_lastHandled) {
+					continue;
+				}
+
+				g_lastHandled = button->timeCode;
+
+				if (debug) {
+					logger::info("toggle key pressed");
+				}
+
+				LowerWeapon::GetSingleton().Toggle();
+			}
+		}
+	}
+
 	LowerWeapon& LowerWeapon::GetSingleton()
 	{
 		static LowerWeapon singleton;
 		return singleton;
+	}
+
+	void LowerWeapon::MenuInput(RE::MenuControls* a_this, const RE::InputEvent* a_queueHead)
+	{
+		ScanForToggle(a_queueHead);
+		_originalMenuInput(a_this, a_queueHead);
+	}
+
+	void LowerWeapon::PlayerInput(RE::PlayerControls* a_this, const RE::InputEvent* a_queueHead)
+	{
+		ScanForToggle(a_queueHead);
+		_originalPlayerInput(a_this, a_queueHead);
+	}
+
+	void LowerWeapon::InstallInput()
+	{
+		if (_inputInstalled || Settings::GetSingleton().ToggleKey() < 0) {
+			return;
+		}
+
+		REL::Relocation<std::uintptr_t> menuVtable{ RE::VTABLE::MenuControls[0] };
+		_originalMenuInput = menuVtable.write_vfunc(PERFORM_INPUT_VFUNC, MenuInput);
+
+		REL::Relocation<std::uintptr_t> playerVtable{ RE::VTABLE::PlayerControls[0] };
+		_originalPlayerInput = playerVtable.write_vfunc(PERFORM_INPUT_VFUNC, PlayerInput);
+
+		_inputInstalled = true;
+
+		logger::info("toggle key {} registered", Settings::GetSingleton().ToggleKey());
 	}
 
 	void LowerWeapon::Install()
@@ -67,15 +141,26 @@ namespace ALW
 			logger::error("failed to find GunDownFP");
 		}
 
+		_gunUp = handler->LookupForm<RE::TESIdleForm>(GUN_UP_FP, VANILLA_FILE);
+		if (!_gunUp) {
+			logger::error("failed to find GunUpFP");
+		}
+
 		_perk = handler->LookupForm<RE::BGSPerk>(LOWER_WEAPON_PERK, PLUGIN_FILE);
 		if (!_perk) {
 			logger::warn("{} is not loaded, the walk animation fix is unavailable", PLUGIN_FILE);
 		}
+
+		InstallInput();
 	}
 
 	void LowerWeapon::OnPlayerReady()
 	{
+		InstallInput();
 		Cancel();
+
+		_lowered = false;
+		_manualHold = false;
 
 		const auto player = RE::PlayerCharacter::GetSingleton();
 		if (!player) {
@@ -93,19 +178,43 @@ namespace ALW
 		}
 	}
 
-	bool LowerWeapon::IsPlayerGraph(const RE::BSAnimationGraphManager* a_manager)
+	bool LowerWeapon::IsPlayerGraph(
+		const RE::BSAnimationGraphManager* a_manager,
+		const RE::BSAnimationGraphEvent& a_event)
 	{
 		const auto player = RE::PlayerCharacter::GetSingleton();
 		if (!player) {
 			return false;
 		}
 
+		const auto holder = reinterpret_cast<std::uint64_t>(static_cast<RE::TESObjectREFR*>(player));
+		if (a_event.holderID == holder) {
+			return true;
+		}
+
+		if (a_event.holderID == player->GetHandle().native_handle()) {
+			return true;
+		}
+
 		RE::BSTSmartPointer<RE::BSAnimationGraphManager> manager;
-		if (!player->GetAnimationGraphManagerImpl(manager)) {
+		if (!player->GetAnimationGraphManagerImpl(manager) || !manager) {
 			return false;
 		}
 
-		return manager.get() == a_manager;
+		if (manager.get() == a_manager) {
+			return true;
+		}
+
+		const auto candidate = reinterpret_cast<std::uint64_t>(a_manager);
+		for (const auto& sub : manager->subManagers) {
+			const auto raw = sub.ptrAndFlagsStorage;
+			if ((raw & ~static_cast<std::uint64_t>(7)) == candidate ||
+				(raw & 0x0000FFFFFFFFFFFFull) == candidate) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	bool LowerWeapon::IsTracked(const RE::BSFixedString& a_tag) const
@@ -120,11 +229,21 @@ namespace ALW
 	{
 		auto& self = GetSingleton();
 
-		if (self._gunDown && self.IsTracked(a_event.tag) && IsPlayerGraph(a_this)) {
-			self.Arm();
+		if (self._gunDown && self.IsTracked(a_event.tag)) {
+			const bool mine = IsPlayerGraph(a_this, a_event);
 
-			if (a_event.tag == self._sprintStop && Settings::GetSingleton().LowerAfterSprint()) {
-				F4SE::GetTaskInterface()->AddTask([&self]() { self.Lower(); });
+			if (Settings::GetSingleton().DebugLog()) {
+				logger::info("anim event '{}' holder {:X} graph {} -> player: {}",
+					a_event.tag.c_str(), a_event.holderID, static_cast<const void*>(a_this), mine);
+			}
+
+			if (mine) {
+				self._lowered = false;
+				self.Arm();
+
+				if (a_event.tag == self._sprintStop && Settings::GetSingleton().LowerAfterSprint()) {
+					F4SE::GetTaskInterface()->AddTask([&self]() { self.Lower(); });
+				}
 			}
 		}
 
@@ -150,6 +269,10 @@ namespace ALW
 
 	void LowerWeapon::Arm()
 	{
+		if (!Settings::GetSingleton().AutoLower() || _manualHold) {
+			return;
+		}
+
 		const auto delay = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
 			std::chrono::duration<float>(Settings::GetSingleton().LowerDelay()));
 
@@ -232,21 +355,63 @@ namespace ALW
 		return true;
 	}
 
+	bool LowerWeapon::PlayIdle(RE::PlayerCharacter* a_player, RE::TESIdleForm* a_idle, bool a_testConditions) const
+	{
+		if (!a_idle || !a_player->currentProcess) {
+			return false;
+		}
+
+		a_player->currentProcess->SetupSpecialIdle(
+			*a_player, RE::DEFAULT_OBJECT::kActionIdle, a_idle, a_testConditions, nullptr);
+
+		return true;
+	}
+
 	void LowerWeapon::Lower()
 	{
-		if (!_gunDown) {
+		if (!Settings::GetSingleton().AutoLower() || _manualHold) {
 			return;
 		}
 
 		const auto player = RE::PlayerCharacter::GetSingleton();
-		if (!player || !player->currentProcess) {
+		if (!player || !CanLower(player)) {
 			return;
 		}
 
-		if (!CanLower(player)) {
+		if (PlayIdle(player, _gunDown, true)) {
+			_lowered = true;
+		}
+	}
+
+	void LowerWeapon::Raise()
+	{
+		const auto player = RE::PlayerCharacter::GetSingleton();
+		if (!player || !player->GetWeaponMagicDrawn()) {
 			return;
 		}
 
-		player->currentProcess->SetupSpecialIdle(*player, RE::DEFAULT_OBJECT::kActionIdle, _gunDown, true, nullptr);
+		if (PlayIdle(player, _gunUp, false)) {
+			_lowered = false;
+		}
+	}
+
+	void LowerWeapon::Toggle()
+	{
+		const auto player = RE::PlayerCharacter::GetSingleton();
+		if (!player || !player->GetWeaponMagicDrawn()) {
+			return;
+		}
+
+		Cancel();
+
+		if (_lowered) {
+			_manualHold = true;
+			Raise();
+		} else {
+			_manualHold = false;
+			if (PlayIdle(player, _gunDown, true)) {
+				_lowered = true;
+			}
+		}
 	}
 }
