@@ -37,6 +37,8 @@ namespace ALW
 		void Lower();
 		void Raise();
 
+		[[nodiscard]] static bool IsLightOn(RE::PlayerCharacter* a_player);
+
 		[[nodiscard]] bool CanLower(RE::PlayerCharacter* a_player) const;
 		[[nodiscard]] bool PlayIdle(RE::PlayerCharacter* a_player, RE::TESIdleForm* a_idle, bool a_testConditions) const;
 

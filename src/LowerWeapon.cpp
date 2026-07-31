@@ -18,6 +18,12 @@ namespace ALW
 		constexpr std::size_t PROCESS_EVENT_VFUNC = 0x01;
 		constexpr std::size_t PERFORM_INPUT_VFUNC = 0x00;
 
+#if defined(F4_RUNTIME_PRENG)
+		constexpr REL::ID IS_PIPBOY_LIGHT_ON{ 426550 };
+#else
+		constexpr REL::ID IS_PIPBOY_LIGHT_ON{ 2233202 };
+#endif
+
 		constexpr auto SPRINT_STOP = "PASprintStop"sv;
 
 		constexpr std::array TRACKED_TAGS{
@@ -339,11 +345,35 @@ namespace ALW
 			return false;
 		}
 
-		if (Settings::GetSingleton().RequireLightOff() && a_player->IsPipboyLightOn()) {
+		if (Settings::GetSingleton().RequireLightOff() && IsLightOn(a_player)) {
 			return false;
 		}
 
 		return true;
+	}
+
+	bool LowerWeapon::IsLightOn(RE::PlayerCharacter* a_player)
+	{
+		using func_t = bool (*)(RE::PlayerCharacter*);
+
+		static const auto native = []() -> func_t {
+			const REL::Relocation<std::uintptr_t> target{ IS_PIPBOY_LIGHT_ON };
+			const auto text = REL::Module::get().segment(REL::Segment::text);
+			const auto address = target.address();
+
+			if (address < text.address() || address >= text.address() + text.size()) {
+				logger::error("IsPipboyLightOn resolved to {:X}, outside executable code", address);
+				return nullptr;
+			}
+
+			return reinterpret_cast<func_t>(address);
+		}();
+
+		if (native) {
+			return native(a_player);
+		}
+
+		return a_player->pipboyLight.get() != nullptr || a_player->niPipboyLight.get() != nullptr;
 	}
 
 	bool LowerWeapon::PlayIdle(RE::PlayerCharacter* a_player, RE::TESIdleForm* a_idle, bool a_testConditions) const
