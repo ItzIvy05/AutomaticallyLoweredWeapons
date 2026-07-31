@@ -196,25 +196,16 @@ namespace ALW
 			return true;
 		}
 
+		if (!player->Get3D()) {
+			return false;
+		}
+
 		RE::BSTSmartPointer<RE::BSAnimationGraphManager> manager;
 		if (!player->GetAnimationGraphManagerImpl(manager) || !manager) {
 			return false;
 		}
 
-		if (manager.get() == a_manager) {
-			return true;
-		}
-
-		const auto candidate = reinterpret_cast<std::uint64_t>(a_manager);
-		for (const auto& sub : manager->subManagers) {
-			const auto raw = sub.ptrAndFlagsStorage;
-			if ((raw & ~static_cast<std::uint64_t>(7)) == candidate ||
-				(raw & 0x0000FFFFFFFFFFFFull) == candidate) {
-				return true;
-			}
-		}
-
-		return false;
+		return manager.get() == a_manager;
 	}
 
 	bool LowerWeapon::IsTracked(const RE::BSFixedString& a_tag) const
@@ -357,7 +348,7 @@ namespace ALW
 
 	bool LowerWeapon::PlayIdle(RE::PlayerCharacter* a_player, RE::TESIdleForm* a_idle, bool a_testConditions) const
 	{
-		if (!a_idle || !a_player->currentProcess) {
+		if (!a_idle || !a_player->currentProcess || !a_player->Get3D()) {
 			return false;
 		}
 
